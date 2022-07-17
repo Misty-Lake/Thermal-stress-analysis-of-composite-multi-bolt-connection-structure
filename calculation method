@@ -1,0 +1,184 @@
+import numpy as np
+
+class Solution:
+    def __init__(self,boltNum,lapType,plateType,BCtype):
+        self.boltNum = boltNum
+        self.lapType = lapType #1-single lap,2-double lap
+        self.plateType=plateType 
+        self.BCtype=BCtype
+
+        self.loadArr_Global=[0.00] * (boltNum)
+        self.loadArr_Local = [0.00] * (boltNum)
+        self.xArr= [0.00] * (boltNum*3+2)
+
+        #--------# Pgae-1 
+        self.plate_A_W=28.575 #unit:mm
+        self.plate_A_t =2.68992
+        self.plate_B_W = 28.575
+        self.plate_B_t =4.4832
+
+        self.bolt_distance=23.8125
+        self.bolt_diameter=6.35
+
+        self.plate_ExternalLoad=1281.1    #unit:N. For double lap,PB=2P0
+
+        #--------# Pgae-2 
+        self.plate_A_E = 72500  #unit:MPa
+        self.plate_B_E = 57593
+        self.bolt_E = 110000
+        self.plate_A_CTE = 2.304e-5  
+        self.plate_B_CTE = 0.2095e-5
+
+        self.initial_T = 20.0  # float
+        self.final_T = 50.0  #float
+
+    # inputParameter
+    def inputParameter_page1(self,A_width,A_thick,B_width,B_thick,S,D,P0):
+        self.plate_A_W = A_width
+        self.plate_A_t = A_thick
+        self.plate_B_W = B_width
+        self.plate_B_t = B_thick
+        self.bolt_distance = S
+        self.bolt_diameter = D  
+        self.plate_ExternalLoad = P0  
+    def inputParameter_page2(self,A_modulus,A_CTE,B_modulus,B_CTE,bolt_modulus,T1,T2):
+        self.plate_A_E = A_modulus  
+        self.plate_B_E =B_modulus
+        self.bolt_E = bolt_modulus
+        self.plate_A_CTE = A_CTE*pow(10,-5)
+        self.plate_B_CTE = B_CTE*pow(10,-5)
+        self.initial_T = T1  
+        self.final_T = T2
+
+    # flexibility calculation
+    def Cf(self):
+        k1=self.lapType
+        k2=4.2
+        if self.plateType==1:
+            k2=2.2
+        elif self.plateType==2:
+            k2 = 3.0
+        return (k2/k1)*(((self.plate_A_t+self.plate_B_t)/(2*self.bolt_diameter))**(2/3))*\
+               (1/(k1*self.plate_A_E*self.plate_A_t)+1/(self.plate_B_E*self.plate_B_t)+
+                1/(2*k1*self.bolt_E*self.plate_A_t)+1/(2*self.bolt_E*self.plate_B_t))
+    def C_plate_A(self):
+        return self.bolt_distance/(self.plate_A_E*self.plate_A_W*self.plate_A_t)
+    def C_plate_B(self):
+        return self.bolt_distance/(self.plate_B_E*self.plate_B_W*self.plate_B_t)
+    def dT(self):
+        return self.final_T-self.initial_T
+
+    # part-1-global
+    def P_A_pos(self, i):  # i=0~n
+        return i
+    def P_B_pos(self, i):  # i=0~n
+        return self.boltNum + 1 + i
+    def P_bolt_pos(self, i):  # i=1~n
+        return 2 * (self.boltNum + 1) + i - 1
+
+    def mat_A1(self):
+        n = self.boltNum
+        res=np.mat([[0.0]])
+        res=np.tile(res,(3*n+2,3*n+2)) #Initial 0 matrix
+
+        row_number = 0
+        for i in range(0, n, 1):  # i=0~n-1
+            res[row_number,self.P_A_pos(i)]=1
+            res[row_number, self.P_A_pos(i+1)] = -1
+            res[row_number, self.P_bolt_pos(i + 1)] = 1
+            row_number += 1
+
+        row_number = n
+        for i in range(0, n, 1):   # i=0~n-1
+            res[row_number, self.P_B_pos(i)] = 1
+            res[row_number, self.P_B_pos(i + 1)] = -1
+            res[row_number, self.P_bolt_pos(i + 1)] = -1
+            row_number += 1
+            
+        row_number = 2 * n
+        C_f = self.Cf()
+        C_A = self.C_plate_A()
+        C_B = self.C_plate_B()
+
+        for i in range(1, n, 1):  # i=1~n-1
+            res[row_number, self.P_A_pos(i)] =  C_A
+            res[row_number, self.P_B_pos(i)] = -C_B
+            res[row_number, self.P_bolt_pos(i + 1)] = -C_f
+            res[row_number, self.P_bolt_pos(i)] = C_f
+            row_number += 1
+
+        row_number = 3*n-1
+        res[3 * n - 1, self.P_A_pos(0)] = 1
+        res[3 * n, self.P_A_pos(n)] = 1
+        res[3 * n + 1, self.P_B_pos(0)] = 1
+
+        return  res
+    def mat_B1(self):
+        n = self.boltNum
+        res = np.mat([[0.0]])
+        res = np.tile(res, (3 * n + 2, 1))  
+
+        res[3 * n - 1,0] = self.plate_ExternalLoad
+        if self.BCtype==2:
+            res[3 * n - 1,0] +=-self.plate_A_CTE * self.dT() * (self.plate_A_E * self.plate_A_W * self.plate_A_t)-self.plate_B_CTE * self.dT() * (self.plate_B_E * self.plate_B_W * self.plate_B_t)
+
+        return res
+    def process1(self):
+        n = self.boltNum
+        res=np.linalg.solve(self.mat_A1(),self.mat_B1())
+        for i in range(n):
+            self.loadArr_Global[i]=int(res[self.P_bolt_pos(i+1),0])
+        print(self.loadArr_Global)
+
+    # part-2-local
+    def mat_A2(self):
+        n = self.boltNum
+        res = np.mat([[0.0]])
+        res = np.tile(res, (n, n)) 
+
+        C_f = self.Cf()
+        C_A = self.C_plate_A()
+        C_B = self.C_plate_B()
+
+        row_number = 0
+        for i in range(1, n, 1): #
+            res[row_number, i-1] =  C_A+C_B-C_f
+            res[row_number, i] = -(C_A+C_B-C_f)
+            row_number += 1
+
+        row_number = n-1
+        for i in range(0, n, 1):
+            res[row_number, i]=1
+
+        return res
+    def mat_B2(self):
+        n = self.boltNum
+        res = np.mat([[0.0]])
+        res = np.tile(res, (n, 1)) 
+
+        dL_A = self.plate_A_CTE * self.dT() * self.bolt_distance
+        dL_B = self.plate_B_CTE * self.dT() * self.bolt_distance
+
+        for i in range(0, n-1, 1):
+            res[i,0]=dL_A-dL_B
+
+        return res
+    def process2(self):
+        n = self.boltNum
+        res=np.linalg.solve(self.mat_A2(),self.mat_B2())
+        for i in range(n):
+            self.loadArr_Local[i]=int(res[i,0])
+        print(self.loadArr_Local)
+
+    # part-3-sum
+    def boltShear(self):
+        n = self.boltNum
+        res = [0] * (3 * n)
+        self.process1()
+        self.process2()
+        for k in range(0, n, 1):
+            res[k] = int(self.loadArr_Global[k])
+            res[k + n] = int(self.loadArr_Local[k])
+            res[k + 2 * n] = int(self.loadArr_Local[k] + self.loadArr_Global[k])
+        #print(res)
+        return res
